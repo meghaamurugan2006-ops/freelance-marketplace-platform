@@ -1,0 +1,1407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Guildwork — Freelance Marketplace Platform</title>
+<meta name="description" content="Guildwork: a centralized freelance marketplace with secure escrow, in-platform messaging, and project tracking." />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Work+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.24.7/babel.min.js"></script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo, useRef, createContext, useContext } = React;
+
+/* ---------------------------------------------------------------- */
+/* Utilities                                                          */
+/* ---------------------------------------------------------------- */
+
+function uid(prefix) {
+  return (prefix || "id") + "_" + Math.random().toString(36).slice(2, 10);
+}
+
+function money(n) {
+  return "₹" + Number(n || 0).toLocaleString("en-IN");
+}
+
+function fmtDate(iso) {
+  const d = new Date(iso);
+  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+}
+
+function timeAgo(iso) {
+  const secs = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (secs < 60) return "just now";
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return mins + "m ago";
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return hrs + "h ago";
+  const days = Math.floor(hrs / 24);
+  if (days < 30) return days + "d ago";
+  return fmtDate(iso);
+}
+
+function initials(name) {
+  if (!name) return "?";
+  const parts = name.trim().split(/\s+/);
+  const first = parts[0] ? parts[0][0] : "";
+  const last = parts.length > 1 ? parts[parts.length - 1][0] : "";
+  return (first + last).toUpperCase();
+}
+
+const AVATAR_PALETTE = ["#B8863B", "#2B6E64", "#8C5A8C", "#3E6FA8", "#B8452F", "#5B6270"];
+function avatarColor(seed) {
+  let h = 0;
+  for (let i = 0; i < (seed || "").length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+  return AVATAR_PALETTE[h % AVATAR_PALETTE.length];
+}
+
+/* ---------------------------------------------------------------- */
+/* Storage layer (localStorage acting as the "database")             */
+/* ---------------------------------------------------------------- */
+
+const DB_KEYS = {
+  users: "guildwork_users",
+  projects: "guildwork_projects",
+  bids: "guildwork_bids",
+  messages: "guildwork_messages",
+  escrow: "guildwork_escrow",
+  reviews: "guildwork_reviews",
+  session: "guildwork_session",
+  seeded: "guildwork_seeded_v1",
+};
+
+function load(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch (e) {
+    return fallback;
+  }
+}
+
+function save(key, value) {
+  localStorage.setItem(key, JSON.stringify(value));
+}
+
+function seedIfNeeded() {
+  if (load(DB_KEYS.seeded, false)) return;
+
+  const now = Date.now();
+  const day = 86400000;
+
+  const users = [
+    { id: "u_client_demo", name: "Ananya Rao", email: "ananya@brightloom.studio", password: "demo1234", role: "client", company: "Brightloom Studio", bio: "Product lead building small, focused tools for independent studios.", skills: [], rate: null, createdAt: new Date(now - 40 * day).toISOString() },
+    { id: "u_client_2", name: "Vikram Shah", email: "vikram@northfield.co", password: "demo1234", role: "client", company: "Northfield & Co", bio: "Runs a boutique consulting practice.", skills: [], rate: null, createdAt: new Date(now - 30 * day).toISOString() },
+    { id: "u_freelancer_demo", name: "Meera Iyer", email: "meera@example.com", password: "demo1234", role: "freelancer", company: "", bio: "Front-end developer specialising in React and design systems. Six years freelancing across fintech and retail.", skills: ["React", "TypeScript", "UI Design"], rate: 1200, createdAt: new Date(now - 60 * day).toISOString() },
+    { id: "u_freelancer_2", name: "Rahul Nair", email: "rahul@example.com", password: "demo1234", role: "freelancer", company: "", bio: "Backend engineer — Node.js, MongoDB, and payment integrations.", skills: ["Node.js", "MongoDB", "API Design"], rate: 1500, createdAt: new Date(now - 55 * day).toISOString() },
+    { id: "u_freelancer_3", name: "Divya Menon", email: "divya@example.com", password: "demo1234", role: "freelancer", company: "", bio: "Brand and product designer. Loves early-stage products.", skills: ["Branding", "Figma", "UI Design"], rate: 900, createdAt: new Date(now - 20 * day).toISOString() },
+  ];
+
+  const projects = [
+    { id: "p1", clientId: "u_client_demo", title: "Redesign onboarding flow for a savings app", description: "We need a friendlier, faster onboarding for our savings app. Deliverables: annotated Figma flow, a clickable prototype, and a short handoff document for engineering.", skills: ["UI Design", "Figma"], budget: 28000, deadline: new Date(now + 18 * day).toISOString(), status: "open", selectedFreelancerId: null, createdAt: new Date(now - 6 * day).toISOString() },
+    { id: "p2", clientId: "u_client_demo", title: "Build a REST API for inventory tracking", description: "Node.js + MongoDB service with auth, CRUD for SKUs, and CSV export. Should be documented well enough that our in-house team can extend it later.", skills: ["Node.js", "MongoDB", "API Design"], budget: 42000, deadline: new Date(now + 25 * day).toISOString(), status: "in_progress", selectedFreelancerId: "u_freelancer_2", createdAt: new Date(now - 14 * day).toISOString() },
+    { id: "p3", clientId: "u_client_2", title: "Logo and brand mark for a coffee subscription", description: "Small coffee subscription brand needs a mark, a two-colour palette, and packaging-ready assets.", skills: ["Branding", "Figma"], budget: 15000, deadline: new Date(now + 10 * day).toISOString(), status: "open", selectedFreelancerId: null, createdAt: new Date(now - 3 * day).toISOString() },
+    { id: "p4", clientId: "u_client_2", title: "React dashboard for internal analytics", description: "Convert existing static reports into an interactive dashboard: filters, charts, and CSV export.", skills: ["React", "UI Design"], budget: 36000, deadline: new Date(now + 20 * day).toISOString(), status: "delivered", selectedFreelancerId: "u_freelancer_demo", createdAt: new Date(now - 22 * day).toISOString() },
+    { id: "p5", clientId: "u_client_demo", title: "Design system audit and component library", description: "Audit our current components, consolidate duplicates, and ship a small documented library in Figma.", skills: ["UI Design", "Figma", "React"], budget: 31000, deadline: new Date(now + 30 * day).toISOString(), status: "completed", selectedFreelancerId: "u_freelancer_demo", createdAt: new Date(now - 45 * day).toISOString() },
+  ];
+
+  const bids = [
+    { id: "b1", projectId: "p1", freelancerId: "u_freelancer_demo", amount: 26000, message: "I've shipped three onboarding redesigns for fintech apps this year — happy to share before/after metrics.", status: "pending", createdAt: new Date(now - 2 * day).toISOString() },
+    { id: "b2", projectId: "p1", freelancerId: "u_freelancer_3", amount: 24000, message: "Would love to work on this — I can start Monday and share a rough flow within three days.", status: "pending", createdAt: new Date(now - 1 * day).toISOString() },
+    { id: "b3", projectId: "p2", freelancerId: "u_freelancer_2", amount: 40000, message: "Built something near-identical for a logistics client last quarter.", status: "accepted", createdAt: new Date(now - 13 * day).toISOString() },
+    { id: "b4", projectId: "p4", freelancerId: "u_freelancer_demo", amount: 34000, message: "I can reuse an existing charting setup, which should save time on this timeline.", status: "accepted", createdAt: new Date(now - 21 * day).toISOString() },
+    { id: "b5", projectId: "p5", freelancerId: "u_freelancer_demo", amount: 31000, message: "I maintain a component-audit checklist I use for exactly this kind of work.", status: "accepted", createdAt: new Date(now - 44 * day).toISOString() },
+  ];
+
+  const messages = [
+    { id: "m1", projectId: "p2", senderId: "u_client_demo", text: "Hi Rahul — excited to get started. I've shared the current schema in the brief, let me know if anything's unclear.", createdAt: new Date(now - 12 * day).toISOString() },
+    { id: "m2", projectId: "p2", senderId: "u_freelancer_2", text: "Thanks! Schema looks good. I'll have the auth endpoints ready by Thursday for a first look.", createdAt: new Date(now - 12 * day + 3600000).toISOString() },
+    { id: "m3", projectId: "p2", senderId: "u_freelancer_2", text: "Quick update: CRUD routes and CSV export are done, working on tests now.", createdAt: new Date(now - 2 * day).toISOString() },
+    { id: "m4", projectId: "p4", senderId: "u_freelancer_demo", text: "Dashboard is deployed to the staging link — marked the project as delivered. Let me know what you think!", createdAt: new Date(now - 1 * day).toISOString() },
+  ];
+
+  const escrow = [
+    { id: "e1", projectId: "p2", amount: 40000, status: "held", createdAt: new Date(now - 13 * day).toISOString() },
+    { id: "e2", projectId: "p4", amount: 34000, status: "held", createdAt: new Date(now - 20 * day).toISOString() },
+    { id: "e3", projectId: "p5", amount: 31000, status: "released", createdAt: new Date(now - 44 * day).toISOString() },
+  ];
+
+  const reviews = [
+    { id: "r1", projectId: "p5", fromId: "u_client_demo", toId: "u_freelancer_demo", rating: 5, comment: "Thorough, communicative, and delivered ahead of schedule.", createdAt: new Date(now - 15 * day).toISOString() },
+  ];
+
+  save(DB_KEYS.users, users);
+  save(DB_KEYS.projects, projects);
+  save(DB_KEYS.bids, bids);
+  save(DB_KEYS.messages, messages);
+  save(DB_KEYS.escrow, escrow);
+  save(DB_KEYS.reviews, reviews);
+  save(DB_KEYS.seeded, true);
+}
+
+/* ---------------------------------------------------------------- */
+/* App-wide context: session, data, toasts, navigation                */
+/* ---------------------------------------------------------------- */
+
+const AppCtx = createContext(null);
+function useApp() {
+  return useContext(AppCtx);
+}
+
+function useHashRoute() {
+  const parse = () => {
+    const raw = window.location.hash.replace(/^#\/?/, "");
+    const parts = raw.split("/").filter(Boolean);
+    return { name: parts[0] || "home", param: parts[1] || null };
+  };
+  const [route, setRoute] = useState(parse());
+  useEffect(() => {
+    const onChange = () => setRoute(parse());
+    window.addEventListener("hashchange", onChange);
+    return () => window.removeEventListener("hashchange", onChange);
+  }, []);
+  return route;
+}
+
+function navigate(path) {
+  window.location.hash = "#/" + path;
+  window.scrollTo(0, 0);
+}
+
+/* ---------------------------------------------------------------- */
+/* Small shared components                                            */
+/* ---------------------------------------------------------------- */
+
+function Avatar({ name, size }) {
+  const s = size || 36;
+  return (
+    <div
+      className="gw-avatar"
+      style={{
+        width: s, height: s, borderRadius: "50%",
+        background: avatarColor(name || ""),
+        fontSize: Math.max(11, s * 0.38),
+      }}
+    >
+      {initials(name)}
+    </div>
+  );
+}
+
+function Seal({ tone, children }) {
+  return <span className={"gw-seal gw-seal--" + (tone || "neutral")}>{children}</span>;
+}
+
+function statusSeal(status) {
+  const map = {
+    open: { tone: "brass", label: "Open" },
+    in_progress: { tone: "teal", label: "In progress" },
+    delivered: { tone: "amber", label: "Delivered" },
+    completed: { tone: "teal", label: "Completed" },
+  };
+  const s = map[status] || { tone: "neutral", label: status };
+  return <Seal tone={s.tone}>{s.label}</Seal>;
+}
+
+function StarRating({ value, onChange, size }) {
+  const stars = [1, 2, 3, 4, 5];
+  return (
+    <div className="gw-stars" style={{ fontSize: size || 18 }}>
+      {stars.map((n) => (
+        <span
+          key={n}
+          className={"gw-star" + (n <= value ? " gw-star--on" : "")}
+          onClick={onChange ? () => onChange(n) : undefined}
+          style={{ cursor: onChange ? "pointer" : "default" }}
+        >
+          ★
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function AvgRating({ userId, reviews }) {
+  const mine = reviews.filter((r) => r.toId === userId);
+  if (mine.length === 0) return <span className="gw-muted">No reviews yet</span>;
+  const avg = mine.reduce((a, r) => a + r.rating, 0) / mine.length;
+  return (
+    <span className="gw-rating-inline">
+      <StarRating value={Math.round(avg)} size={14} />
+      <span className="gw-muted"> {avg.toFixed(1)} ({mine.length})</span>
+    </span>
+  );
+}
+
+function EmptyState({ title, body, action }) {
+  return (
+    <div className="gw-empty">
+      <div className="gw-empty__mark">◇</div>
+      <h3>{title}</h3>
+      <p>{body}</p>
+      {action}
+    </div>
+  );
+}
+
+function TagInput({ value, onChange, placeholder }) {
+  const [draft, setDraft] = useState("");
+  function addTag() {
+    const t = draft.trim();
+    if (t && !value.includes(t)) onChange([...value, t]);
+    setDraft("");
+  }
+  return (
+    <div className="gw-taginput">
+      {value.map((t) => (
+        <span className="gw-tag" key={t}>
+          {t}
+          <button type="button" onClick={() => onChange(value.filter((x) => x !== t))}>×</button>
+        </span>
+      ))}
+      <input
+        value={draft}
+        placeholder={placeholder || "Add a skill and press Enter"}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === ",") {
+            e.preventDefault();
+            addTag();
+          }
+        }}
+        onBlur={addTag}
+      />
+    </div>
+  );
+}
+
+function Toasts({ toasts }) {
+  return (
+    <div className="gw-toasts">
+      {toasts.map((t) => (
+        <div key={t.id} className={"gw-toast gw-toast--" + (t.tone || "ink")}>
+          {t.text}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------- */
+/* Navigation chrome                                                   */
+/* ---------------------------------------------------------------- */
+
+function PublicNav() {
+  const { session } = useApp();
+  return (
+    <header className="gw-publicnav">
+      <div className="gw-shell gw-publicnav__row">
+        <a href="#/" className="gw-wordmark">Guildwork</a>
+        <nav className="gw-publicnav__links">
+          <a href="#/browse">Browse work</a>
+          <a href="#/#how">How escrow works</a>
+          {session ? (
+            <a href="#/dashboard" className="gw-btn gw-btn--brass">Go to dashboard</a>
+          ) : (
+            <>
+              <a href="#/login">Log in</a>
+              <a href="#/signup" className="gw-btn gw-btn--brass">Sign up</a>
+            </>
+          )}
+        </nav>
+      </div>
+    </header>
+  );
+}
+
+const NAV_ITEMS = [
+  { key: "dashboard", label: "Dashboard", icon: "▦" },
+  { key: "browse", label: "Browse projects", icon: "☰", roles: ["freelancer"] },
+  { key: "post", label: "Post a project", icon: "✎", roles: ["client"] },
+  { key: "messages", label: "Messages", icon: "✉" },
+  { key: "escrow", label: "Escrow", icon: "◈" },
+  { key: "profile", label: "Profile", icon: "◐" },
+];
+
+function Sidebar({ route }) {
+  const { session, logout } = useApp();
+  const items = NAV_ITEMS.filter((i) => !i.roles || i.roles.includes(session.role));
+  return (
+    <aside className="gw-sidebar">
+      <a href="#/" className="gw-wordmark gw-wordmark--sidebar">Guildwork</a>
+      <div className="gw-sidebar__who">
+        <Avatar name={session.name} size={40} />
+        <div>
+          <div className="gw-sidebar__name">{session.name}</div>
+          <div className="gw-sidebar__role">{session.role === "client" ? "Client" : "Freelancer"}</div>
+        </div>
+      </div>
+      <nav className="gw-sidebar__nav">
+        {items.map((i) => (
+          <a key={i.key} href={"#/" + i.key} className={"gw-sidebar__link" + (route.name === i.key ? " gw-sidebar__link--active" : "")}>
+            <span className="gw-sidebar__icon">{i.icon}</span>{i.label}
+          </a>
+        ))}
+      </nav>
+      <button className="gw-sidebar__logout" onClick={logout}>Log out</button>
+    </aside>
+  );
+}
+
+/* ---------------------------------------------------------------- */
+/* Landing page                                                       */
+/* ---------------------------------------------------------------- */
+
+function Landing() {
+  const { data } = useApp();
+  const openProjects = data.projects.filter((p) => p.status === "open").slice(0, 3);
+  const heldValue = data.escrow.filter((e) => e.status === "held").reduce((a, e) => a + e.amount, 0);
+
+  return (
+    <div className="gw-landing">
+      <PublicNav />
+
+      <section className="gw-hero">
+        <div className="gw-shell gw-hero__grid">
+          <div>
+            <p className="gw-hero__kicker">A marketplace with the money already in the vault</p>
+            <h1 className="gw-hero__title">Post the work. Fund it once. Pay when it's done.</h1>
+            <p className="gw-hero__sub">
+              Guildwork brings project posting, bidding, messaging, and escrow-backed payments
+              into one place, so clients and freelancers stop juggling five different tools to
+              finish one piece of work.
+            </p>
+            <div className="gw-hero__cta">
+              <a href="#/signup" className="gw-btn gw-btn--brass gw-btn--lg">Post a project</a>
+              <a href="#/browse" className="gw-btn gw-btn--ghost gw-btn--lg">Browse open work</a>
+            </div>
+            <div className="gw-hero__stats">
+              <div><strong>{data.projects.length}</strong><span>projects on the board</span></div>
+              <div><strong>{money(heldValue)}</strong><span>currently held in escrow</span></div>
+              <div><strong>{data.users.filter((u) => u.role === "freelancer").length}</strong><span>freelancers in the guild</span></div>
+            </div>
+          </div>
+          <div className="gw-hero__panel">
+            <div className="gw-ledger-card gw-ledger-card--sample">
+              <div className="gw-ledger-card__top">
+                <Seal tone="teal">Escrow secured</Seal>
+                <span className="gw-muted">Sample listing</span>
+              </div>
+              <h4>Redesign onboarding flow for a savings app</h4>
+              <p className="gw-muted">React · Figma · UI Design</p>
+              <div className="gw-ledger-card__meta">
+                <span>{money(28000)} budget</span>
+                <span>2 proposals</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="gw-section" id="how">
+        <div className="gw-shell">
+          <h2 className="gw-section__title">How escrow protects both sides</h2>
+          <ol className="gw-steps">
+            <li>
+              <span className="gw-steps__num">01</span>
+              <div>
+                <h4>Client funds the escrow</h4>
+                <p>Once a proposal is accepted, the agreed amount is set aside and marked as held — visible to both sides at all times.</p>
+              </div>
+            </li>
+            <li>
+              <span className="gw-steps__num">02</span>
+              <div>
+                <h4>Freelancer delivers the work</h4>
+                <p>Progress and files move through the project thread, so there's a single trail from brief to delivery.</p>
+              </div>
+            </li>
+            <li>
+              <span className="gw-steps__num">03</span>
+              <div>
+                <h4>Funds release on approval</h4>
+                <p>The client releases the held amount once the work is accepted — no separate invoice, no chasing payment.</p>
+              </div>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <section className="gw-section gw-section--muted">
+        <div className="gw-shell">
+          <div className="gw-section__headrow">
+            <h2 className="gw-section__title">Open on the board right now</h2>
+            <a href="#/browse" className="gw-link">See all open work →</a>
+          </div>
+          <div className="gw-grid3">
+            {openProjects.map((p) => (
+              <a href={"#/project/" + p.id} className="gw-ledger-card" key={p.id}>
+                <div className="gw-ledger-card__top">
+                  {statusSeal(p.status)}
+                  <span className="gw-muted">{timeAgo(p.createdAt)}</span>
+                </div>
+                <h4>{p.title}</h4>
+                <p className="gw-muted gw-clamp2">{p.description}</p>
+                <div className="gw-ledger-card__meta">
+                  <span>{money(p.budget)}</span>
+                  <span>{data.bids.filter((b) => b.projectId === p.id).length} proposals</span>
+                </div>
+              </a>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <footer className="gw-footer">
+        <div className="gw-shell gw-footer__row">
+          <span className="gw-wordmark">Guildwork</span>
+          <span className="gw-muted">A student project — Freelance Marketplace Platform, Information Technology.</span>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------- */
+/* Auth pages                                                          */
+/* ---------------------------------------------------------------- */
+
+function AuthShell({ title, sub, children }) {
+  return (
+    <div className="gw-authpage">
+      <PublicNav />
+      <div className="gw-shell gw-authpage__wrap">
+        <div className="gw-authcard">
+          <h1>{title}</h1>
+          <p className="gw-muted">{sub}</p>
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Login() {
+  const { login, toast } = useApp();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+
+  function submit(e) {
+    e.preventDefault();
+    const res = login(email.trim().toLowerCase(), password);
+    if (!res.ok) {
+      setError(res.error);
+      return;
+    }
+    navigate("dashboard");
+  }
+
+  function demo(role) {
+    const creds = role === "client" ? { email: "ananya@brightloom.studio", password: "demo1234" } : { email: "meera@example.com", password: "demo1234" };
+    const res = login(creds.email, creds.password);
+    if (res.ok) {
+      toast("Signed in as the demo " + role + " account.", "teal");
+      navigate("dashboard");
+    }
+  }
+
+  return (
+    <AuthShell title="Welcome back" sub="Log in to manage your projects, bids, and escrow.">
+      <form onSubmit={submit} className="gw-form">
+        <label>Email
+          <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
+        </label>
+        <label>Password
+          <input type="password" required value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
+        </label>
+        {error && <p className="gw-error">{error}</p>}
+        <button type="submit" className="gw-btn gw-btn--brass gw-btn--block">Log in</button>
+      </form>
+      <div className="gw-authcard__divider"><span>or explore instantly</span></div>
+      <div className="gw-demo-row">
+        <button className="gw-btn gw-btn--ghost" onClick={() => demo("client")}>View as demo client</button>
+        <button className="gw-btn gw-btn--ghost" onClick={() => demo("freelancer")}>View as demo freelancer</button>
+      </div>
+      <p className="gw-muted gw-authcard__foot">New here? <a href="#/signup">Create an account</a></p>
+    </AuthShell>
+  );
+}
+
+function Signup() {
+  const { signup } = useApp();
+  const [role, setRole] = useState("client");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [skills, setSkills] = useState([]);
+  const [error, setError] = useState("");
+
+  function submit(e) {
+    e.preventDefault();
+    const res = signup({ role, name: name.trim(), email: email.trim().toLowerCase(), password, skills });
+    if (!res.ok) {
+      setError(res.error);
+      return;
+    }
+    navigate("dashboard");
+  }
+
+  return (
+    <AuthShell title="Join the guild" sub="Set up an account as a client posting work, or a freelancer looking for it.">
+      <form onSubmit={submit} className="gw-form">
+        <div className="gw-roletoggle">
+          <button type="button" className={role === "client" ? "gw-roletoggle__btn gw-roletoggle__btn--active" : "gw-roletoggle__btn"} onClick={() => setRole("client")}>I'm hiring</button>
+          <button type="button" className={role === "freelancer" ? "gw-roletoggle__btn gw-roletoggle__btn--active" : "gw-roletoggle__btn"} onClick={() => setRole("freelancer")}>I'm freelancing</button>
+        </div>
+        <label>Full name
+          <input required value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name" />
+        </label>
+        <label>Email
+          <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
+        </label>
+        <label>Password
+          <input type="password" required minLength={4} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="At least 4 characters" />
+        </label>
+        {role === "freelancer" && (
+          <label>Skills
+            <TagInput value={skills} onChange={setSkills} placeholder="e.g. React, then press Enter" />
+          </label>
+        )}
+        {error && <p className="gw-error">{error}</p>}
+        <button type="submit" className="gw-btn gw-btn--brass gw-btn--block">Create account</button>
+      </form>
+      <p className="gw-muted gw-authcard__foot">Already have an account? <a href="#/login">Log in</a></p>
+    </AuthShell>
+  );
+}
+
+/* ---------------------------------------------------------------- */
+/* Dashboard                                                           */
+/* ---------------------------------------------------------------- */
+
+function StatTile({ label, value, tone }) {
+  return (
+    <div className={"gw-stattile gw-stattile--" + (tone || "ink")}>
+      <div className="gw-stattile__value">{value}</div>
+      <div className="gw-stattile__label">{label}</div>
+    </div>
+  );
+}
+
+function ClientDashboard() {
+  const { session, data } = useApp();
+  const myProjects = data.projects.filter((p) => p.clientId === session.id);
+  const active = myProjects.filter((p) => p.status === "in_progress" || p.status === "delivered");
+  const held = data.escrow.filter((e) => myProjects.some((p) => p.id === e.projectId) && e.status === "held").reduce((a, e) => a + e.amount, 0);
+  const openCount = myProjects.filter((p) => p.status === "open").length;
+
+  return (
+    <div>
+      <div className="gw-pageheader">
+        <div>
+          <h1>Welcome back, {session.name.split(" ")[0]}</h1>
+          <p className="gw-muted">Here's where things stand across your projects.</p>
+        </div>
+        <a href="#/post" className="gw-btn gw-btn--brass">Post a project</a>
+      </div>
+
+      <div className="gw-grid3">
+        <StatTile label="Open for proposals" value={openCount} tone="brass" />
+        <StatTile label="Active engagements" value={active.length} tone="teal" />
+        <StatTile label="Held in escrow" value={money(held)} tone="ink" />
+      </div>
+
+      <h3 className="gw-subhead">Your projects</h3>
+      {myProjects.length === 0 ? (
+        <EmptyState title="Nothing posted yet" body="Post your first project to start receiving proposals." action={<a href="#/post" className="gw-btn gw-btn--brass">Post a project</a>} />
+      ) : (
+        <div className="gw-ledgerlist">
+          {myProjects.map((p) => (
+            <a href={"#/project/" + p.id} key={p.id} className="gw-ledgerrow">
+              <div className="gw-ledgerrow__main">
+                <span className="gw-ledgerrow__title">{p.title}</span>
+                <span className="gw-muted">{data.bids.filter((b) => b.projectId === p.id).length} proposals · posted {timeAgo(p.createdAt)}</span>
+              </div>
+              <div className="gw-ledgerrow__side">
+                <span>{money(p.budget)}</span>
+                {statusSeal(p.status)}
+              </div>
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FreelancerDashboard() {
+  const { session, data } = useApp();
+  const myBids = data.bids.filter((b) => b.freelancerId === session.id);
+  const activeProjects = data.projects.filter((p) => p.selectedFreelancerId === session.id && (p.status === "in_progress" || p.status === "delivered"));
+  const earning = data.escrow.filter((e) => activeProjects.some((p) => p.id === e.projectId)).reduce((a, e) => a + e.amount, 0);
+  const recommended = data.projects.filter((p) => p.status === "open" && (session.skills || []).some((s) => p.skills.includes(s))).slice(0, 4);
+  const fallbackOpen = data.projects.filter((p) => p.status === "open").slice(0, 4);
+  const suggestions = recommended.length > 0 ? recommended : fallbackOpen;
+
+  return (
+    <div>
+      <div className="gw-pageheader">
+        <div>
+          <h1>Welcome back, {session.name.split(" ")[0]}</h1>
+          <p className="gw-muted">A quick look at your pipeline.</p>
+        </div>
+        <a href="#/browse" className="gw-btn gw-btn--brass">Browse open work</a>
+      </div>
+
+      <div className="gw-grid3">
+        <StatTile label="Proposals sent" value={myBids.length} tone="brass" />
+        <StatTile label="Active engagements" value={activeProjects.length} tone="teal" />
+        <StatTile label="Currently in escrow" value={money(earning)} tone="ink" />
+      </div>
+
+      <h3 className="gw-subhead">Matched to your skills</h3>
+      {suggestions.length === 0 ? (
+        <EmptyState title="No open projects match yet" body="Check back soon, or browse everything on the board." action={<a href="#/browse" className="gw-btn gw-btn--brass">Browse projects</a>} />
+      ) : (
+        <div className="gw-grid3">
+          {suggestions.map((p) => (
+            <a href={"#/project/" + p.id} className="gw-ledger-card" key={p.id}>
+              <div className="gw-ledger-card__top">
+                {statusSeal(p.status)}
+                <span className="gw-muted">{timeAgo(p.createdAt)}</span>
+              </div>
+              <h4>{p.title}</h4>
+              <p className="gw-muted gw-clamp2">{p.description}</p>
+              <div className="gw-ledger-card__meta">
+                <span>{money(p.budget)}</span>
+              </div>
+            </a>
+          ))}
+        </div>
+      )}
+
+      <h3 className="gw-subhead">Your proposals</h3>
+      {myBids.length === 0 ? (
+        <EmptyState title="No proposals sent yet" body="Find a project on the board and send your first proposal." />
+      ) : (
+        <div className="gw-ledgerlist">
+          {myBids.map((b) => {
+            const p = data.projects.find((pr) => pr.id === b.projectId);
+            if (!p) return null;
+            return (
+              <a href={"#/project/" + p.id} key={b.id} className="gw-ledgerrow">
+                <div className="gw-ledgerrow__main">
+                  <span className="gw-ledgerrow__title">{p.title}</span>
+                  <span className="gw-muted">Bid {money(b.amount)} · sent {timeAgo(b.createdAt)}</span>
+                </div>
+                <div className="gw-ledgerrow__side">
+                  <Seal tone={b.status === "accepted" ? "teal" : b.status === "rejected" ? "rust" : "neutral"}>
+                    {b.status === "pending" ? "Awaiting reply" : b.status === "accepted" ? "Accepted" : "Not selected"}
+                  </Seal>
+                </div>
+              </a>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Dashboard() {
+  const { session } = useApp();
+  return (
+    <div className="gw-main">
+      {session.role === "client" ? <ClientDashboard /> : <FreelancerDashboard />}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------- */
+/* Browse projects                                                     */
+/* ---------------------------------------------------------------- */
+
+function BrowseProjects() {
+  const { data, session } = useApp();
+  const [q, setQ] = useState("");
+  const [skill, setSkill] = useState("all");
+
+  const allSkills = useMemo(() => {
+    const set = new Set();
+    data.projects.forEach((p) => p.skills.forEach((s) => set.add(s)));
+    return Array.from(set).sort();
+  }, [data.projects]);
+
+  const results = data.projects.filter((p) => {
+    if (p.status !== "open") return false;
+    if (skill !== "all" && !p.skills.includes(skill)) return false;
+    if (q && !(p.title + " " + p.description).toLowerCase().includes(q.toLowerCase())) return false;
+    return true;
+  });
+
+  return (
+    <div className="gw-main">
+      <div className="gw-pageheader">
+        <div>
+          <h1>Open work on the board</h1>
+          <p className="gw-muted">{results.length} project{results.length === 1 ? "" : "s"} looking for a freelancer right now.</p>
+        </div>
+      </div>
+
+      <div className="gw-filterbar">
+        <input placeholder="Search by title or keyword" value={q} onChange={(e) => setQ(e.target.value)} />
+        <select value={skill} onChange={(e) => setSkill(e.target.value)}>
+          <option value="all">All skills</option>
+          {allSkills.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+      </div>
+
+      {results.length === 0 ? (
+        <EmptyState title="No matching projects" body="Try a different keyword or clear the skill filter." />
+      ) : (
+        <div className="gw-ledgerlist">
+          {results.map((p) => {
+            const client = data.users.find((u) => u.id === p.clientId);
+            const alreadyBid = session.role === "freelancer" && data.bids.some((b) => b.projectId === p.id && b.freelancerId === session.id);
+            return (
+              <a href={"#/project/" + p.id} key={p.id} className="gw-ledgerrow gw-ledgerrow--tall">
+                <div className="gw-ledgerrow__main">
+                  <span className="gw-ledgerrow__title">{p.title}</span>
+                  <p className="gw-muted gw-clamp2">{p.description}</p>
+                  <div className="gw-chiprow">
+                    {p.skills.map((s) => <span className="gw-chip" key={s}>{s}</span>)}
+                  </div>
+                  <span className="gw-muted">Posted by {client ? client.name : "a client"} · {timeAgo(p.createdAt)}</span>
+                </div>
+                <div className="gw-ledgerrow__side">
+                  <span className="gw-ledgerrow__budget">{money(p.budget)}</span>
+                  <span className="gw-muted">{data.bids.filter((b) => b.projectId === p.id).length} proposals</span>
+                  {alreadyBid && <Seal tone="teal">Proposal sent</Seal>}
+                </div>
+              </a>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------- */
+/* Post a project                                                     */
+/* ---------------------------------------------------------------- */
+
+function PostProject() {
+  const { session, addProject, toast } = useApp();
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [skills, setSkills] = useState([]);
+  const [budget, setBudget] = useState("");
+  const [deadline, setDeadline] = useState("");
+  const [error, setError] = useState("");
+
+  function submit(e) {
+    e.preventDefault();
+    if (!title.trim() || !description.trim() || !budget || !deadline) {
+      setError("Please fill in every field before posting.");
+      return;
+    }
+    const project = addProject({
+      clientId: session.id,
+      title: title.trim(),
+      description: description.trim(),
+      skills,
+      budget: Number(budget),
+      deadline: new Date(deadline).toISOString(),
+    });
+    toast("Project posted to the board.", "teal");
+    navigate("project/" + project.id);
+  }
+
+  return (
+    <div className="gw-main gw-main--narrow">
+      <div className="gw-pageheader">
+        <div>
+          <h1>Post a project</h1>
+          <p className="gw-muted">Describe the work clearly — the right freelancers respond faster to specific briefs.</p>
+        </div>
+      </div>
+      <form onSubmit={submit} className="gw-form gw-card">
+        <label>Title
+          <input required value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Redesign our checkout flow" />
+        </label>
+        <label>Description
+          <textarea required rows={6} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What needs to be done, and what does 'finished' look like?" />
+        </label>
+        <label>Skills needed
+          <TagInput value={skills} onChange={setSkills} />
+        </label>
+        <div className="gw-form__row">
+          <label>Budget (₹)
+            <input required type="number" min="1" value={budget} onChange={(e) => setBudget(e.target.value)} placeholder="30000" />
+          </label>
+          <label>Deadline
+            <input required type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
+          </label>
+        </div>
+        {error && <p className="gw-error">{error}</p>}
+        <button type="submit" className="gw-btn gw-btn--brass gw-btn--block">Post to the board</button>
+      </form>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------- */
+/* Project details                                                    */
+/* ---------------------------------------------------------------- */
+
+function ProjectDetails({ id }) {
+  const { session, data, addBid, acceptBid, markDelivered, releaseEscrow, addReview, toast } = useApp();
+  const project = data.projects.find((p) => p.id === id);
+  const [bidAmount, setBidAmount] = useState("");
+  const [bidMessage, setBidMessage] = useState("");
+  const [reviewRating, setReviewRating] = useState(5);
+  const [reviewComment, setReviewComment] = useState("");
+
+  if (!project) {
+    return (
+      <div className="gw-main">
+        <EmptyState title="Project not found" body="It may have been removed." action={<a href="#/browse" className="gw-btn gw-btn--brass">Back to the board</a>} />
+      </div>
+    );
+  }
+
+  const client = data.users.find((u) => u.id === project.clientId);
+  const freelancer = data.users.find((u) => u.id === project.selectedFreelancerId);
+  const projectBids = data.bids.filter((b) => b.projectId === project.id);
+  const myBid = session.role === "freelancer" ? projectBids.find((b) => b.freelancerId === session.id) : null;
+  const isOwner = session.role === "client" && session.id === project.clientId;
+  const isAssignedFreelancer = session.role === "freelancer" && session.id === project.selectedFreelancerId;
+  const escrowEntry = data.escrow.find((e) => e.projectId === project.id);
+  const alreadyReviewed = data.reviews.some((r) => r.projectId === project.id && r.fromId === session.id);
+
+  function submitBid(e) {
+    e.preventDefault();
+    if (!bidAmount) return;
+    addBid({ projectId: project.id, freelancerId: session.id, amount: Number(bidAmount), message: bidMessage.trim() });
+    toast("Proposal sent.", "teal");
+    setBidAmount("");
+    setBidMessage("");
+  }
+
+  function submitReview(e) {
+    e.preventDefault();
+    const toId = session.role === "client" ? project.selectedFreelancerId : project.clientId;
+    addReview({ projectId: project.id, fromId: session.id, toId, rating: reviewRating, comment: reviewComment.trim() });
+    toast("Review posted.", "teal");
+    setReviewComment("");
+  }
+
+  return (
+    <div className="gw-main gw-main--narrow">
+      <div className="gw-pageheader">
+        <div>
+          {statusSeal(project.status)}
+          <h1>{project.title}</h1>
+          <p className="gw-muted">Posted by {client ? client.name : "a client"} · {timeAgo(project.createdAt)} · deadline {fmtDate(project.deadline)}</p>
+        </div>
+        <div className="gw-project__budget">{money(project.budget)}</div>
+      </div>
+
+      <div className="gw-card">
+        <p>{project.description}</p>
+        <div className="gw-chiprow">
+          {project.skills.map((s) => <span className="gw-chip" key={s}>{s}</span>)}
+        </div>
+      </div>
+
+      {freelancer && (
+        <div className="gw-card gw-card--row">
+          <Avatar name={freelancer.name} size={40} />
+          <div>
+            <div className="gw-ledgerrow__title">{freelancer.name} is working on this</div>
+            <AvgRating userId={freelancer.id} reviews={data.reviews} />
+          </div>
+          <a href="#/messages" className="gw-btn gw-btn--ghost">Open thread</a>
+        </div>
+      )}
+
+      {escrowEntry && (
+        <div className="gw-card gw-card--row">
+          <Seal tone={escrowEntry.status === "held" ? "teal" : "brass"}>{escrowEntry.status === "held" ? "Escrow secured" : "Funds released"}</Seal>
+          <div>
+            <div className="gw-ledgerrow__title">{money(escrowEntry.amount)} {escrowEntry.status === "held" ? "held" : "released"}</div>
+            <span className="gw-muted">Funded {timeAgo(escrowEntry.createdAt)}</span>
+          </div>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+            {isAssignedFreelancer && project.status === "in_progress" && (
+              <button className="gw-btn gw-btn--brass" onClick={() => { markDelivered(project.id); toast("Marked as delivered — waiting on client review."); }}>Mark work delivered</button>
+            )}
+            {isOwner && project.status === "delivered" && escrowEntry.status === "held" && (
+              <button className="gw-btn gw-btn--brass" onClick={() => { releaseEscrow(project.id); toast("Funds released to freelancer.", "teal"); }}>Release funds</button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {session.role === "freelancer" && project.status === "open" && !myBid && (
+        <div className="gw-card">
+          <h3 className="gw-subhead gw-subhead--tight">Send a proposal</h3>
+          <form onSubmit={submitBid} className="gw-form">
+            <label>Your bid (₹)
+              <input required type="number" min="1" value={bidAmount} onChange={(e) => setBidAmount(e.target.value)} placeholder={String(project.budget)} />
+            </label>
+            <label>Note to the client
+              <textarea rows={4} value={bidMessage} onChange={(e) => setBidMessage(e.target.value)} placeholder="Why you're a good fit, and how you'd approach it." />
+            </label>
+            <button type="submit" className="gw-btn gw-btn--brass gw-btn--block">Send proposal</button>
+          </form>
+        </div>
+      )}
+
+      {myBid && (
+        <div className="gw-card gw-card--row">
+          <Seal tone={myBid.status === "accepted" ? "teal" : myBid.status === "rejected" ? "rust" : "neutral"}>
+            {myBid.status === "pending" ? "Awaiting reply" : myBid.status === "accepted" ? "Accepted" : "Not selected"}
+          </Seal>
+          <div>
+            <div className="gw-ledgerrow__title">You bid {money(myBid.amount)}</div>
+            <span className="gw-muted">{myBid.message}</span>
+          </div>
+        </div>
+      )}
+
+      {isOwner && project.status === "open" && (
+        <div>
+          <h3 className="gw-subhead">Proposals received</h3>
+          {projectBids.length === 0 ? (
+            <EmptyState title="No proposals yet" body="Sit tight — proposals will show up here as freelancers apply." />
+          ) : (
+            <div className="gw-ledgerlist">
+              {projectBids.map((b) => {
+                const f = data.users.find((u) => u.id === b.freelancerId);
+                return (
+                  <div className="gw-ledgerrow gw-ledgerrow--tall" key={b.id}>
+                    <div className="gw-ledgerrow__main">
+                      <div className="gw-card--row" style={{ padding: 0, border: "none" }}>
+                        <Avatar name={f ? f.name : "?"} size={32} />
+                        <span className="gw-ledgerrow__title">{f ? f.name : "Unknown"}</span>
+                        <AvgRating userId={b.freelancerId} reviews={data.reviews} />
+                      </div>
+                      <p className="gw-muted">{b.message}</p>
+                    </div>
+                    <div className="gw-ledgerrow__side">
+                      <span className="gw-ledgerrow__budget">{money(b.amount)}</span>
+                      <button className="gw-btn gw-btn--brass" onClick={() => { acceptBid(b.id); toast("Proposal accepted — funds moved to escrow.", "teal"); }}>
+                        Accept &amp; fund escrow
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {project.status === "completed" && !alreadyReviewed && (isOwner || isAssignedFreelancer) && (
+        <div className="gw-card">
+          <h3 className="gw-subhead gw-subhead--tight">Leave a review</h3>
+          <form onSubmit={submitReview} className="gw-form">
+            <StarRating value={reviewRating} onChange={setReviewRating} size={24} />
+            <textarea rows={3} value={reviewComment} onChange={(e) => setReviewComment(e.target.value)} placeholder="How did it go?" />
+            <button type="submit" className="gw-btn gw-btn--brass">Post review</button>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------- */
+/* Messages                                                            */
+/* ---------------------------------------------------------------- */
+
+function Messages() {
+  const { session, data, sendMessage } = useApp();
+  const myProjects = data.projects.filter((p) => p.selectedFreelancerId && (p.clientId === session.id || p.selectedFreelancerId === session.id));
+  const [activeId, setActiveId] = useState(myProjects[0] ? myProjects[0].id : null);
+  const [draft, setDraft] = useState("");
+  const active = myProjects.find((p) => p.id === activeId);
+  const thread = active ? data.messages.filter((m) => m.projectId === active.id).sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)) : [];
+  const scrollRef = useRef(null);
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [thread.length, activeId]);
+
+  function otherParty(p) {
+    const otherId = session.role === "client" ? p.selectedFreelancerId : p.clientId;
+    return data.users.find((u) => u.id === otherId);
+  }
+
+  function submit(e) {
+    e.preventDefault();
+    if (!draft.trim() || !active) return;
+    sendMessage({ projectId: active.id, senderId: session.id, text: draft.trim() });
+    setDraft("");
+  }
+
+  return (
+    <div className="gw-main gw-main--flush">
+      <div className="gw-messages">
+        <div className="gw-messages__list">
+          <h2 className="gw-messages__heading">Conversations</h2>
+          {myProjects.length === 0 && <p className="gw-muted" style={{ padding: "0 20px" }}>No active conversations yet — they start once a proposal is accepted.</p>}
+          {myProjects.map((p) => {
+            const other = otherParty(p);
+            const lastMsg = data.messages.filter((m) => m.projectId === p.id).slice(-1)[0];
+            return (
+              <button key={p.id} className={"gw-convo" + (p.id === activeId ? " gw-convo--active" : "")} onClick={() => setActiveId(p.id)}>
+                <Avatar name={other ? other.name : "?"} size={38} />
+                <div className="gw-convo__body">
+                  <div className="gw-convo__name">{other ? other.name : "Unknown"}</div>
+                  <div className="gw-convo__project">{p.title}</div>
+                  {lastMsg && <div className="gw-convo__preview">{lastMsg.text}</div>}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+        <div className="gw-messages__thread">
+          {active ? (
+            <>
+              <div className="gw-messages__threadhead">
+                <Avatar name={otherParty(active) ? otherParty(active).name : "?"} size={34} />
+                <div>
+                  <div className="gw-convo__name">{otherParty(active) ? otherParty(active).name : "Unknown"}</div>
+                  <div className="gw-convo__project">{active.title}</div>
+                </div>
+              </div>
+              <div className="gw-messages__body" ref={scrollRef}>
+                {thread.map((m) => (
+                  <div key={m.id} className={"gw-bubblerow" + (m.senderId === session.id ? " gw-bubblerow--mine" : "")}>
+                    <div className="gw-bubble">
+                      <div>{m.text}</div>
+                      <div className="gw-bubble__time">{timeAgo(m.createdAt)}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <form className="gw-messages__composer" onSubmit={submit}>
+                <input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Write a message…" />
+                <button type="submit" className="gw-btn gw-btn--brass">Send</button>
+              </form>
+            </>
+          ) : (
+            <EmptyState title="Select a conversation" body="Messages tied to your active projects will appear here." />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------- */
+/* Escrow                                                              */
+/* ---------------------------------------------------------------- */
+
+function Escrow() {
+  const { session, data, markDelivered, releaseEscrow, toast } = useApp();
+  const relevant = data.projects.filter((p) => (session.role === "client" ? p.clientId === session.id : p.selectedFreelancerId === session.id) && p.selectedFreelancerId);
+
+  return (
+    <div className="gw-main">
+      <div className="gw-pageheader">
+        <div>
+          <h1>Escrow</h1>
+          <p className="gw-muted">Every funded project and where its payment currently stands.</p>
+        </div>
+      </div>
+      {relevant.length === 0 ? (
+        <EmptyState title="Nothing in escrow yet" body="Escrow entries appear once a proposal is accepted and funded." />
+      ) : (
+        <div className="gw-ledgerlist">
+          {relevant.map((p) => {
+            const e = data.escrow.find((x) => x.projectId === p.id);
+            if (!e) return null;
+            const other = data.users.find((u) => u.id === (session.role === "client" ? p.selectedFreelancerId : p.clientId));
+            return (
+              <div key={p.id} className="gw-ledgerrow gw-ledgerrow--tall">
+                <div className="gw-ledgerrow__main">
+                  <a href={"#/project/" + p.id} className="gw-ledgerrow__title">{p.title}</a>
+                  <span className="gw-muted">With {other ? other.name : "—"} · funded {timeAgo(e.createdAt)}</span>
+                </div>
+                <div className="gw-ledgerrow__side">
+                  <span className="gw-ledgerrow__budget">{money(e.amount)}</span>
+                  <Seal tone={e.status === "held" ? "teal" : "brass"}>{e.status === "held" ? "Held" : "Released"}</Seal>
+                  {session.role === "freelancer" && p.status === "in_progress" && (
+                    <button className="gw-btn gw-btn--ghost" onClick={() => { markDelivered(p.id); toast("Marked as delivered."); }}>Mark delivered</button>
+                  )}
+                  {session.role === "client" && p.status === "delivered" && e.status === "held" && (
+                    <button className="gw-btn gw-btn--brass" onClick={() => { releaseEscrow(p.id); toast("Funds released.", "teal"); }}>Release funds</button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------- */
+/* Profile                                                             */
+/* ---------------------------------------------------------------- */
+
+function Profile() {
+  const { session, data, updateProfile, toast } = useApp();
+  const [bio, setBio] = useState(session.bio || "");
+  const [skills, setSkills] = useState(session.skills || []);
+  const [rate, setRate] = useState(session.rate || "");
+  const myReviews = data.reviews.filter((r) => r.toId === session.id);
+
+  function submit(e) {
+    e.preventDefault();
+    updateProfile({ bio: bio.trim(), skills, rate: rate ? Number(rate) : null });
+    toast("Profile updated.", "teal");
+  }
+
+  return (
+    <div className="gw-main gw-main--narrow">
+      <div className="gw-pageheader">
+        <div className="gw-card--row" style={{ padding: 0, border: "none" }}>
+          <Avatar name={session.name} size={56} />
+          <div>
+            <h1 style={{ margin: 0 }}>{session.name}</h1>
+            <AvgRating userId={session.id} reviews={data.reviews} />
+          </div>
+        </div>
+      </div>
+
+      <form onSubmit={submit} className="gw-form gw-card">
+        <label>About
+          <textarea rows={4} value={bio} onChange={(e) => setBio(e.target.value)} placeholder="Tell clients or freelancers what you do." />
+        </label>
+        {session.role === "freelancer" && (
+          <>
+            <label>Skills
+              <TagInput value={skills} onChange={setSkills} />
+            </label>
+            <label>Rate (₹ per hour, optional)
+              <input type="number" min="0" value={rate} onChange={(e) => setRate(e.target.value)} />
+            </label>
+          </>
+        )}
+        <button type="submit" className="gw-btn gw-btn--brass">Save changes</button>
+      </form>
+
+      <h3 className="gw-subhead">Reviews received</h3>
+      {myReviews.length === 0 ? (
+        <EmptyState title="No reviews yet" body="Reviews appear here once a project is completed." />
+      ) : (
+        <div className="gw-ledgerlist">
+          {myReviews.map((r) => {
+            const from = data.users.find((u) => u.id === r.fromId);
+            const proj = data.projects.find((p) => p.id === r.projectId);
+            return (
+              <div key={r.id} className="gw-ledgerrow gw-ledgerrow--tall">
+                <div className="gw-ledgerrow__main">
+                  <div className="gw-card--row" style={{ padding: 0, border: "none" }}>
+                    <Avatar name={from ? from.name : "?"} size={30} />
+                    <span className="gw-ledgerrow__title">{from ? from.name : "Someone"}</span>
+                    <StarRating value={r.rating} size={14} />
+                  </div>
+                  <p className="gw-muted">{r.comment}</p>
+                  {proj && <span className="gw-muted">On “{proj.title}”</span>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------- */
+/* Root app                                                            */
+/* ---------------------------------------------------------------- */
+
+function AppShellRouted({ route }) {
+  const page = (() => {
+    switch (route.name) {
+      case "dashboard": return <Dashboard />;
+      case "browse": return <BrowseProjects />;
+      case "post": return <PostProject />;
+      case "project": return <ProjectDetails id={route.param} />;
+      case "messages": return <Messages />;
+      case "escrow": return <Escrow />;
+      case "profile": return <Profile />;
+      default: return <Dashboard />;
+    }
+  })();
+  return (
+    <div className="gw-appshell">
+      <Sidebar route={route} />
+      <div className="gw-appshell__content">{page}</div>
+    </div>
+  );
+}
+
+function Root() {
+  const route = useHashRoute();
+  const [session, setSession] = useState(() => load(DB_KEYS.session, null));
+  const [data, setData] = useState(() => ({
+    users: load(DB_KEYS.users, []),
+    projects: load(DB_KEYS.projects, []),
+    bids: load(DB_KEYS.bids, []),
+    messages: load(DB_KEYS.messages, []),
+    escrow: load(DB_KEYS.escrow, []),
+    reviews: load(DB_KEYS.reviews, []),
+  }));
+  const [toasts, setToasts] = useState([]);
+
+  function toast(text, tone) {
+    const id = uid("toast");
+    setToasts((t) => [...t, { id, text, tone }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3200);
+  }
+
+  function persist(next) {
+    setData(next);
+    save(DB_KEYS.users, next.users);
+    save(DB_KEYS.projects, next.projects);
+    save(DB_KEYS.bids, next.bids);
+    save(DB_KEYS.messages, next.messages);
+    save(DB_KEYS.escrow, next.escrow);
+    save(DB_KEYS.reviews, next.reviews);
+  }
+
+  function login(email, password) {
+    const user = data.users.find((u) => u.email === email);
+    if (!user || user.password !== password) return { ok: false, error: "That email and password combination doesn't match our records." };
+    setSession(user);
+    save(DB_KEYS.session, user);
+    return { ok: true };
+  }
+
+  function signup({ role, name, email, password, skills }) {
+    if (!name || !email || !password) return { ok: false, error: "Please fill in every field." };
+    if (data.users.some((u) => u.email === email)) return { ok: false, error: "An account with that email already exists." };
+    const user = { id: uid("u"), name, email, password, role, company: "", bio: "", skills: skills || [], rate: null, createdAt: new Date().toISOString() };
+    const next = { ...data, users: [...data.users, user] };
+    persist(next);
+    setSession(user);
+    save(DB_KEYS.session, user);
+    return { ok: true };
+  }
+
+  function logout() {
+    setSession(null);
+    localStorage.removeItem(DB_KEYS.session);
+    navigate("");
+  }
+
+  function addProject(fields) {
+    const project = { id: uid("p"), status: "open", selectedFreelancerId: null, createdAt: new Date().toISOString(), ...fields };
+    persist({ ...data, projects: [project, ...data.projects] });
+    return project;
+  }
+
+  function addBid(fields) {
+    const bid = { id: uid("b"), status: "pending", createdAt: new Date().toISOString(), ...fields };
+    persist({ ...data, bids: [...data.bids, bid] });
+    return bid;
+  }
+
+  function acceptBid(bidId) {
+    const bid = data.bids.find((b) => b.id === bidId);
+    if (!bid) return;
+    const bids = data.bids.map((b) => {
+      if (b.id === bidId) return { ...b, status: "accepted" };
+      if (b.projectId === bid.projectId) return { ...b, status: "rejected" };
+      return b;
+    });
+    const projects = data.projects.map((p) => p.id === bid.projectId ? { ...p, status: "in_progress", selectedFreelancerId: bid.freelancerId } : p);
+    const escrow = [...data.escrow, { id: uid("e"), projectId: bid.projectId, amount: bid.amount, status: "held", createdAt: new Date().toISOString() }];
+    const project = projects.find((p) => p.id === bid.projectId);
+    const messages = [...data.messages, { id: uid("m"), projectId: bid.projectId, senderId: project.clientId, text: "Looking forward to working together on this — let me know if you need anything to get started.", createdAt: new Date().toISOString() }];
+    persist({ ...data, bids, projects, escrow, messages });
+  }
+
+  function markDelivered(projectId) {
+    persist({ ...data, projects: data.projects.map((p) => p.id === projectId ? { ...p, status: "delivered" } : p) });
+  }
+
+  function releaseEscrow(projectId) {
+    const projects = data.projects.map((p) => p.id === projectId ? { ...p, status: "completed" } : p);
+    const escrow = data.escrow.map((e) => e.projectId === projectId ? { ...e, status: "released" } : e);
+    persist({ ...data, projects, escrow });
+  }
+
+  function addReview(fields) {
+    const review = { id: uid("r"), createdAt: new Date().toISOString(), ...fields };
+    persist({ ...data, reviews: [...data.reviews, review] });
+  }
+
+  function sendMessage(fields) {
+    const message = { id: uid("m"), createdAt: new Date().toISOString(), ...fields };
+    persist({ ...data, messages: [...data.messages, message] });
+  }
+
+  function updateProfile(fields) {
+    const users = data.users.map((u) => u.id === session.id ? { ...u, ...fields } : u);
+    persist({ ...data, users });
+    const updated = { ...session, ...fields };
+    setSession(updated);
+    save(DB_KEYS.session, updated);
+  }
+
+  const ctxValue = {
+    session, data, login, signup, logout,
+    addProject, addBid, acceptBid, markDelivered, releaseEscrow, addReview, sendMessage, updateProfile,
+    toast,
+  };
+
+  const publicRoutes = ["home", "login", "signup"];
+  let body;
+  if (!session && !publicRoutes.includes(route.name)) {
+    body = <Login />;
+  } else if (session && publicRoutes.includes(route.name) && route.name !== "home") {
+    body = <AppShellRouted route={{ name: "dashboard" }} />;
+  } else if (route.name === "home") {
+    body = <Landing />;
+  } else if (route.name === "login") {
+    body = <Login />;
+  } else if (route.name === "signup") {
+    body = <Signup />;
+  } else {
+    body = <AppShellRouted route={route} />;
+  }
+
+  return (
+    <AppCtx.Provider value={ctxValue}>
+      {body}
+      <Toasts toasts={toasts} />
+    </AppCtx.Provider>
+  );
+}
+
+seedIfNeeded();
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<Root />);
+</script>
+</body>
+</html>
